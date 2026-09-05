@@ -25,6 +25,19 @@ logger = logging.getLogger(__name__)
 # Also log werkzeug
 logging.getLogger("werkzeug").setLevel(logging.INFO)
 
+# In-memory live logs - must be before handlers
+recent_logs = []
+MAX_RECENT = 200
+
+def add_log(msg: str):
+    entry = f"{datetime.now().isoformat()} {msg}"
+    logger.info(msg)
+    print(entry, flush=True)
+    recent_logs.append(entry)
+    if len(recent_logs) > MAX_RECENT:
+        recent_logs.pop(0)
+    return msg
+
 app = Flask(__name__)
 
 # Upstream request logging
@@ -42,30 +55,10 @@ def log_response(response):
 def handle_500(e):
     tb = traceback.format_exc()
     logger.error(f"Internal Server Error: {e}\n{tb}")
-    # Also push to recent_logs
     add_log(f"Internal Server Error: {e}")
     for line in tb.splitlines()[-20:]:
         add_log(line)
     return jsonify({"status": "error", "error": str(e), "traceback": tb.splitlines()[-20:], "logs": recent_logs[-50:]}), 500
-
-@app.errorhandler(Exception)
-def handle_exception(e):
-    # Catch-all for unhandled
-    if isinstance(e, Exception) and not isinstance(e, (KeyError, ValueError)):
-        tb = traceback.format_exc()
-        logger.error(f"Unhandled exception: {e}\n{tb}")
-        add_log(f"Unhandled: {e}")
-        return jsonify({"status": "error", "error": str(e), "traceback": tb.splitlines()[-20:], "logs": recent_logs[-50:]}), 500
-    raise e
-
-# In-memory logs for /upload response (last N)
-recent_logs = []
-MAX_RECENT = 100
-
-def add_log(msg: str):
-    entry = f"{datetime.now().isoformat()} {msg}"
-    logger.info(msg)
-    recent_logs.append(entry)
     if len(recent_logs) > MAX_RECENT:
         recent_logs.pop(0)
     return msg
@@ -80,8 +73,10 @@ def index():
             "/health": "GET - health check for UptimeRobot (use this for keep-alive every 5m)",
             "/upload": "GET/POST - scrape feed & upload next video. Query: ?target=username&amount=10&dry_run=1&force=1",
             "/auto": "GET - alias for /upload for UptimeRobot auto-upload (hit every 60m)",
+            "/live": "GET - LIVE LOG HTML (auto-refresh, shows Internal Server Error)",
+            "/stream": "GET - SSE stream for upstream",
             "/config": "GET - show global config.json (sanitized)",
-            "/logs": "GET - recent logs",
+            "/logs": "GET - recent logs JSON",
             "/stats": "GET - dedup stats"
         },
         "time": datetime.now().isoformat()
@@ -136,6 +131,51 @@ def logs():
         "logs": recent_logs[-50:],
         "count": len(recent_logs)
     })
+
+@app.route("/live")
+def live():
+    # Live log HTML with auto-refresh for Render - shows upstream + Internal Server Error
+    html = """<!doctype html>
+<html><head><meta charset=utf-8><title>Live Logs - instabot2</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<style>body{font-family:monospace;background:#0f172a;color:#e2e8f0;margin:0;padding:12px}h1{font-size:18px;margin:0 0 8px}#log{white-space:pre-wrap;background:#1e293b;padding:10px;border-radius:8px;max-height:75vh;overflow:auto;font-size:12px;line-height:1.4}button{padding:6px 12px;border-radius:6px;border:0;background:#38bdf8;cursor:pointer;margin-right:6px}a{color:#7dd3fc}</style>
+</head><body>
+<h1>🔴 Live Logs - instabot2 <a href="/health">health</a> <a href="/upload?dry_run=1&amount=2">test upload</a></h1>
+<div><button onclick="fetchLogs()">Refresh</button><button onclick="clearLogs()">Clear view</button><span id=status></span></div>
+<div id=log>Loading...</div>
+<script>
+let timer=null;
+async function fetchLogs(){
+  document.getElementById('status').textContent=' fetching...';
+  try{
+    let r=await fetch('/logs'); let j=await r.json();
+    let s=await fetch('/health'); let h=await s.json();
+    let txt=`Health: ${JSON.stringify(h)}\\n--- Logs (${j.count} total, showing 50) ---\\n` + (j.logs||[]).join('\\n');
+    document.getElementById('log').textContent=txt;
+    document.getElementById('log').scrollTop=document.getElementById('log').scrollHeight;
+    document.getElementById('status').textContent=' ok '+new Date().toLocaleTimeString();
+  }catch(e){ document.getElementById('status').textContent=' error '+e; }
+}
+function clearLogs(){document.getElementById('log').textContent='';}
+fetchLogs(); timer=setInterval(fetchLogs, 2000);
+</script>
+</body></html>"""
+    return html, 200, {"Content-Type": "text/html"}
+
+@app.route("/stream")
+def stream():
+    # SSE live stream - upstream friendly
+    from flask import Response
+    def gen():
+        last = 0
+        for _ in range(60):  # 60*2s = 2min stream
+            if len(recent_logs) > last:
+                for line in recent_logs[last:]:
+                    yield f"data: {line}\\n\\n"
+                last = len(recent_logs)
+            time.sleep(2)
+        yield "data: [stream end]\\n\\n"
+    return Response(gen(), mimetype="text/event-stream", headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
 
 @app.route("/stats")
 def stats():
