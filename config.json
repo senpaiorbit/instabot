@@ -1,0 +1,15 @@
+{
+  "target_username": null,
+  "scrape_amount": 10,
+  "extra_caption": "Follow for more 🔥",
+  "caption_template": "{original}\n\n🎥 via @{username}",
+  "upload_mode": "clip",
+  "dedup_enabled": true,
+  "rate_limit_seconds": 90,
+  "port": 10000,
+  "session_path": "session.json",
+  "store_path": "/data/dedup.json",
+  "tmp_dir": "/tmp/instabot",
+  "use_local_cover_fallback": true,
+  "log_level": "INFO"
+}

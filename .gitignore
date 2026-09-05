@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+venv/
+dedup.json
+/tmp/
+session.json
+!session.json.example
+*.mp4
+*.jpg

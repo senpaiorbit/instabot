@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: instabot2
+    env: python
+    plan: free
+    region: singapore # closest to IN, change to oregon if US
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: SESSION_JSON
+        sync: false
+      - key: TARGET_USERNAME
+        sync: false
+      - key: UPLOAD_SECRET
+        sync: false
+        # generateValue: true  # uncomment to auto-generate
+      - key: SCRAPE_AMOUNT
+        value: "10"
+      - key: EXTRA_CAPTION
+        value: "Follow for more 🔥"
