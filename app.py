@@ -18,12 +18,45 @@ except Exception as e:
     GLOBAL_CONFIG = {}
     print(f"config load failed: {e}")
 
-# Logging setup
+# Logging setup - upstream to stdout for Render
 log_level = GLOBAL_CONFIG.get("log_level", "INFO") if isinstance(GLOBAL_CONFIG, dict) else "INFO"
-logging.basicConfig(level=getattr(logging, log_level, logging.INFO), format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=getattr(logging, log_level, logging.INFO), format="%(asctime)s [%(levelname)s] %(message)s", force=True)
 logger = logging.getLogger(__name__)
+# Also log werkzeug
+logging.getLogger("werkzeug").setLevel(logging.INFO)
 
 app = Flask(__name__)
+
+# Upstream request logging
+@app.before_request
+def log_request():
+    logger.info(f"--> {request.method} {request.path} args={dict(request.args)} ip={request.remote_addr} ua={request.headers.get('User-Agent','')[:60]}")
+
+@app.after_request
+def log_response(response):
+    logger.info(f"<-- {request.method} {request.path} {response.status_code}")
+    return response
+
+# Global error handler to always return logs + show Internal Server Error upstream
+@app.errorhandler(500)
+def handle_500(e):
+    tb = traceback.format_exc()
+    logger.error(f"Internal Server Error: {e}\n{tb}")
+    # Also push to recent_logs
+    add_log(f"Internal Server Error: {e}")
+    for line in tb.splitlines()[-20:]:
+        add_log(line)
+    return jsonify({"status": "error", "error": str(e), "traceback": tb.splitlines()[-20:], "logs": recent_logs[-50:]}), 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    # Catch-all for unhandled
+    if isinstance(e, Exception) and not isinstance(e, (KeyError, ValueError)):
+        tb = traceback.format_exc()
+        logger.error(f"Unhandled exception: {e}\n{tb}")
+        add_log(f"Unhandled: {e}")
+        return jsonify({"status": "error", "error": str(e), "traceback": tb.splitlines()[-20:], "logs": recent_logs[-50:]}), 500
+    raise e
 
 # In-memory logs for /upload response (last N)
 recent_logs = []
