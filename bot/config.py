@@ -12,13 +12,16 @@ DEFAULT_CONFIG = {
     "caption_template": "{original}\n\n🎥 via @{username}",
     "upload_mode": "clip",
     "dedup_enabled": True,
+    "dedup_mode": "local_plus_profile",
     "rate_limit_seconds": 90,
     "port": 10000,
     "session_path": "session.json",
-    "store_path": "/data/dedup.json",
+    "store_path": "/tmp/instabot_dedup.json",
     "tmp_dir": "/tmp/instabot",
     "use_local_cover_fallback": True,
-    "log_level": "INFO"
+    "log_level": "INFO",
+    "profile_check_amount": 12,
+    "caption_marker": True
 }
 
 CONFIG_PATH = Path(__file__).parent.parent / "config.json"

@@ -8,13 +8,12 @@ def log_msg(msg: str, logs=None):
     if logs is not None:
         logs.append(msg)
 
-def build_caption(original: str, username: str = None, extra: str = None, template: str = None) -> str:
-    """Build new caption preserving original, add credit via template"""
+def build_caption(original: str, username: str = None, extra: str = None, template: str = None, source_code: str = None, add_marker: bool = True) -> str:
+    """Build new caption preserving original, add credit via template. Adds #src_{code} marker for free-tier dedup."""
     original = (original or "").strip()
     if template and "{original}" in template:
         try:
             base = template.format(original=original, username=username or "unknown", extra=extra or "")
-            # clean double newlines if original empty
             if not original:
                 base = base.replace("{original}", "").strip()
         except Exception:
@@ -31,6 +30,11 @@ def build_caption(original: str, username: str = None, extra: str = None, templa
                 base += credit
         if extra:
             base += f"\n\n{extra}"
+    # Add source marker for free-tier dedup (hidden at end, survives cold start)
+    if add_marker and source_code:
+        marker = f"#src_{source_code}"
+        if marker not in base:
+            base += f"\n{marker}"
     if not base.strip():
         base = "🔥 #repost #viral"
     return base[:2200]
