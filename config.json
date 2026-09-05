@@ -16,5 +16,8 @@
   "profile_check_amount": 12,
   "caption_marker": true,
   "custom_cover": null,
-  "force_personalized_feed": true
+  "force_personalized_feed": true,
+  "reels_only": true,
+  "reels_source": "reels",
+  "use_instaloader": true
 }

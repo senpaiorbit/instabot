@@ -1,5 +1,6 @@
 Flask==3.1.0
 instagrapi==2.18.18
+instaloader==4.15.3
 Pillow>=12.2.0
 requests>=2.34.2
 python-dotenv==1.0.1

@@ -371,12 +371,22 @@ def upload():
         cl = get_client(logs=logs)
         log("Login OK")
 
-        # 2. Scrape
-        log(f"Step 2: Scraping feed (target={target or 'timeline'})...")
+        # 2. Scrape - combine Instaloader for personalized reels + instagrapi for upload
+        reels_only = bool(GLOBAL_CONFIG.get("reels_only", True))
+        use_instaloader = bool(GLOBAL_CONFIG.get("use_instaloader", True))
+        # Allow query override ?reels=0/1 and ?use_instaloader=0/1
+        if request.args.get("reels") is not None:
+            reels_only = request.args.get("reels") in ("1","true","yes")
+        if request.args.get("use_instaloader") is not None:
+            use_instaloader = request.args.get("use_instaloader") in ("1","true","yes")
+        src = "reels" if reels_only else "timeline"
+        if target:
+            src = f"@{target}"
+        log(f"Step 2: Scraping {src} (reels_only={reels_only} use_instaloader={use_instaloader} target={target or 'personalized'})...")
         from bot.feed import scrape_feed, get_next_video_not_posted
         from bot.store import load_posted_ids, save_posted_id, get_stats
 
-        all_medias, videos = scrape_feed(cl, amount=amount, target_username=target, logs=logs)
+        all_medias, videos = scrape_feed(cl, amount=amount, target_username=target, reels_only=reels_only, use_instaloader=use_instaloader, logs=logs)
         log(f"Scraped {len(all_medias)} total, {len(videos)} videos")
 
         if not videos:
