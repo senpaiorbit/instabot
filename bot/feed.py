@@ -24,41 +24,78 @@ def scrape_feed(cl, amount: int = 10, target_username: str = None, logs: list = 
             raw = cl.user_medias(user_id, amount=amount)
         else:
             log_msg(f"Scraping timeline feed (amount={amount})", logs)
-            # get_timeline_feed in 2.18 returns Dict, need to parse feed_items
-            feed_dict = cl.get_timeline_feed()
-            log_msg(f"get_timeline_feed returned keys: {list(feed_dict.keys())[:6]}", logs)
             raw = []
-            # Try to parse feed_items -> extract Media via private API helper
-            if isinstance(feed_dict, dict) and "feed_items" in feed_dict:
-                parsed = 0
-                for item in feed_dict.get("feed_items", []):
-                    media_or_ad = item.get("media_or_ad") or item.get("media")
-                    if media_or_ad:
+            # Paginate timeline feed to collect enough medias (feed is ad-heavy, need 2-3 pages)
+            next_max_id = None
+            pages = 0
+            max_pages = 3
+            seen_pks = set()
+            while len(raw) < amount and pages < max_pages:
+                try:
+                    if next_max_id is None:
+                        feed_dict = cl.get_timeline_feed()
+                    else:
+                        feed_dict = cl.get_timeline_feed(max_id=next_max_id)
+                    pages += 1
+                    feed_items = feed_dict.get("feed_items", [])
+                    num_results = feed_dict.get("num_results", len(feed_items))
+                    next_max_id = feed_dict.get("next_max_id")
+                    more_available = feed_dict.get("more_available", False)
+                    log_msg(f"Page {pages}: feed_items={len(feed_items)} num_results={num_results} more={more_available} next_max_id={str(next_max_id)[:20] if next_max_id else None}", logs)
+                    if not feed_items:
+                        log_msg("No feed_items in page, stopping pagination", logs)
+                        break
+                    parsed_this_page = 0
+                    for item in feed_items:
+                        media_or_ad = item.get("media_or_ad") or item.get("media")
+                        if not media_or_ad:
+                            continue
+                        # Skip obvious ads without hitting API: check for ad metadata
+                        # Ads often have pk with suffix _mccr or product_type ad in dict
+                        if "ad_metadata" in media_or_ad or media_or_ad.get("product_type") == "ad":
+                            log_msg(f"Skipping ad in feed_items pk={media_or_ad.get('pk')}", logs)
+                            continue
+                        pk = media_or_ad.get("pk") or media_or_ad.get("id")
+                        if not pk:
+                            continue
+                        pk_str = str(pk).split("_")[0]
+                        if pk_str in seen_pks:
+                            continue
+                        seen_pks.add(pk_str)
                         try:
-                            # Use private extractor if available
-                            if hasattr(cl, "_parse_media"):
-                                # not exist, try media_info path
-                                pass
-                            # Best effort: try to inject via cl.media_info using pk
-                            pk = media_or_ad.get("pk") or media_or_ad.get("id")
-                            if pk:
-                                try:
-                                    m = cl.media_info(str(pk).split("_")[0])  # media pk without user id suffix
-                                    raw.append(m)
-                                    parsed += 1
-                                    if len(raw) >= amount:
-                                        break
-                                except Exception as e:
-                                    log_msg(f"media_info parse failed for {pk}: {e}", logs)
+                            m = cl.media_info(pk_str)
+                            raw.append(m)
+                            parsed_this_page += 1
+                            if len(raw) >= amount:
+                                break
                         except Exception as e:
-                            log_msg(f"feed_items parse error: {e}", logs)
-                log_msg(f"Parsed {parsed} medias from feed_items", logs)
-            else:
-                log_msg(f"Unexpected feed_dict format: {str(feed_dict)[:300]}", logs)
+                            log_msg(f"media_info failed for {pk_str}: {e}", logs)
+                            # Try direct dict parsing as fallback without extra call
+                            try:
+                                # Attempt to build minimal media from dict if media_info fails
+                                if media_or_ad.get("video_versions"):
+                                    # It's a video, fabricate minimal object via private
+                                    # Use cl's internal extractor if exists: _extract_media
+                                    if hasattr(cl, "extract_media_gql"):
+                                        pass
+                                    log_msg(f"Would parse dict directly for {pk_str} but media_info required", logs)
+                            except:
+                                pass
+                    log_msg(f"Page {pages} parsed {parsed_this_page} medias (total {len(raw)}/{amount})", logs)
+                    if not more_available or not next_max_id:
+                        log_msg("No more pages available", logs)
+                        break
+                    if len(raw) >= amount:
+                        break
+                except Exception as e:
+                    log_msg(f"Timeline pagination error page {pages}: {e}", logs)
+                    break
 
-            # Fallback: if parsing failed, use self medias (still videos from following)
+            log_msg(f"Timeline pagination done: {len(raw)} total raw, pages={pages}", logs)
+
+            # If still 0 and filtered will be 0, log hint
             if not raw:
-                log_msg(f"Fallback: trying cl.user_medias for self (feed parse yielded 0)", logs)
+                log_msg(f"Fallback: timeline yielded 0 raw, trying cl.user_medias for self as last resort", logs)
                 try:
                     self_id = cl.user_id
                     raw = cl.user_medias(self_id, amount=amount)
@@ -66,17 +103,6 @@ def scrape_feed(cl, amount: int = 10, target_username: str = None, logs: list = 
                 except Exception as e:
                     log_msg(f"Fallback failed: {e}", logs)
                     raw = []
-                # If still empty, try explore? last resort: try to get home feed via private pagination
-                if not raw:
-                    try:
-                        # Try pagination via get_timeline_feed with max_id
-                        log_msg("Attempting pagination fetch via get_timeline_feed next_max_id", logs)
-                        next_id = feed_dict.get("next_max_id")
-                        if next_id:
-                            feed2 = cl.get_timeline_feed(max_id=next_id)
-                            log_msg(f"Second page keys: {list(feed2.keys())[:5]}", logs)
-                    except Exception as e:
-                        log_msg(f"Pagination attempt failed: {e}", logs)
 
         log_msg(f"Fetched {len(raw)} raw medias", logs)
 
@@ -134,6 +160,8 @@ def scrape_feed(cl, amount: int = 10, target_username: str = None, logs: list = 
         if skipped_ads:
             log_msg(f"Skipped {skipped_ads} ad videos", logs)
         log_msg(f"Filtered {len(videos)} videos with downloadable URL out of {len(medias)}", logs)
+        if len(videos) == 0 and len(medias) > 0:
+            log_msg(f"HINT: Timeline feed is ad-heavy. Set TARGET_USERNAME in config.json:2 or Render env to scrape a specific user (e.g. \"instagram\") for reliable videos. Or increase scrape_amount (now {len(medias)} raw, try amount=20).", logs)
         return medias, videos
 
     except Exception as e:
