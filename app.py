@@ -188,18 +188,13 @@ def stats():
     })
 
 def _wants_html():
-    # Browser wants HTML, UptimeRobot/API wants JSON
-    if request.args.get("json") == "1" or request.args.get("format") == "json":
-        return False
+    # Only return HTML if explicitly requested - default is JSON/auto for feed->scrape->upload
+    # Use ?html=1 or ?format=html for HTML view; otherwise JSON for automatic work
     if request.args.get("html") == "1" or request.args.get("format") == "html":
         return True
-    accept = request.headers.get("Accept", "")
-    # UptimeRobot uses Go-http-client, curl uses */* but browser sends text/html
-    if "text/html" in accept:
-        return True
-    # Default for /upload in browser is HTML live log, for /auto is JSON
-    if request.path == "/upload" and "Mozilla" in request.headers.get("User-Agent", ""):
-        return True
+    if request.args.get("json") == "1" or request.args.get("format") == "json":
+        return False
+    # No auto HTML - keep /upload automatic (JSON) as you requested
     return False
 
 def _upload_html_shell():
