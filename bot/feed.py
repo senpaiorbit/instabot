@@ -45,43 +45,67 @@ def scrape_feed(cl, amount: int = 10, target_username: str = None, logs: list = 
                     if not feed_items:
                         log_msg("No feed_items in page, stopping pagination", logs)
                         break
-                    parsed_this_page = 0
-                    for item in feed_items:
-                        media_or_ad = item.get("media_or_ad") or item.get("media")
-                        if not media_or_ad:
-                            continue
-                        # Skip obvious ads without hitting API: check for ad metadata
-                        # Ads often have pk with suffix _mccr or product_type ad in dict
-                        if "ad_metadata" in media_or_ad or media_or_ad.get("product_type") == "ad":
-                            log_msg(f"Skipping ad in feed_items pk={media_or_ad.get('pk')}", logs)
-                            continue
-                        pk = media_or_ad.get("pk") or media_or_ad.get("id")
-                        if not pk:
-                            continue
-                        pk_str = str(pk).split("_")[0]
-                        if pk_str in seen_pks:
-                            continue
-                        seen_pks.add(pk_str)
+                    # Upstream debug: log sample keys of first item when parsed 0
+                    if pages == 1 and len(feed_items) > 0:
+                        sample = feed_items[0]
+                        log_msg(f"Sample feed_item keys: {list(sample.keys())}", logs)
+                        # Try to show media_or_ad structure
                         try:
-                            m = cl.media_info(pk_str)
-                            raw.append(m)
-                            parsed_this_page += 1
-                            if len(raw) >= amount:
-                                break
+                            moa = sample.get("media_or_ad") or sample.get("media") or {}
+                            log_msg(f"Sample media_or_ad keys: {list(moa.keys())[:10]} pk={moa.get('pk')} product_type={moa.get('product_type')} ad_metadata={bool(moa.get('ad_metadata'))}", logs)
+                            # Also check nested media if exists
+                            if "media" in moa and isinstance(moa["media"], dict):
+                                log_msg(f"Nested media keys: {list(moa['media'].keys())[:10]}", logs)
                         except Exception as e:
-                            log_msg(f"media_info failed for {pk_str}: {e}", logs)
-                            # Try direct dict parsing as fallback without extra call
+                            log_msg(f"Sample logging failed: {e}", logs)
+
+                    parsed_this_page = 0
+                    skipped_ads = 0
+                    skipped_no_pk = 0
+                    for idx, item in enumerate(feed_items):
+                        try:
+                            media_or_ad = item.get("media_or_ad") or item.get("media")
+                            if not media_or_ad:
+                                # Could be suggested user or other
+                                log_msg(f"Item {idx} has no media_or_ad/media, keys={list(item.keys())}", logs)
+                                continue
+                            # Handle nested media inside media_or_ad (some feed versions wrap)
+                            # If media_or_ad contains 'media' dict, unwrap
+                            if "media" in media_or_ad and isinstance(media_or_ad["media"], dict) and "pk" not in media_or_ad:
+                                media_or_ad = media_or_ad["media"]
+                            # Skip ads early
+                            if "ad_metadata" in media_or_ad or media_or_ad.get("product_type") == "ad" or "ad" in str(media_or_ad.get("pk","")):
+                                skipped_ads += 1
+                                log_msg(f"Skipping ad idx={idx} pk={media_or_ad.get('pk')} product_type={media_or_ad.get('product_type')}", logs)
+                                continue
+                            pk = media_or_ad.get("pk") or media_or_ad.get("id")
+                            if not pk:
+                                skipped_no_pk += 1
+                                log_msg(f"Item {idx} no pk, keys={list(media_or_ad.keys())[:8]}", logs)
+                                continue
+                            pk_str = str(pk).split("_")[0]
+                            if pk_str in seen_pks:
+                                continue
+                            seen_pks.add(pk_str)
+                            # Try media_info, but also log if it looks like video
+                            is_video_hint = bool(media_or_ad.get("video_versions") or media_or_ad.get("video_url") or media_or_ad.get("media_type")==2)
+                            log_msg(f"Fetching media_info for idx={idx} pk={pk_str} video_hint={is_video_hint}", logs)
                             try:
-                                # Attempt to build minimal media from dict if media_info fails
-                                if media_or_ad.get("video_versions"):
-                                    # It's a video, fabricate minimal object via private
-                                    # Use cl's internal extractor if exists: _extract_media
-                                    if hasattr(cl, "extract_media_gql"):
-                                        pass
-                                    log_msg(f"Would parse dict directly for {pk_str} but media_info required", logs)
-                            except:
-                                pass
-                    log_msg(f"Page {pages} parsed {parsed_this_page} medias (total {len(raw)}/{amount})", logs)
+                                m = cl.media_info(pk_str)
+                                raw.append(m)
+                                parsed_this_page += 1
+                                log_msg(f"Parsed ok pk={pk_str} code={getattr(m,'code','?')} type={getattr(m,'media_type','?')}", logs)
+                                if len(raw) >= amount:
+                                    break
+                            except Exception as e:
+                                log_msg(f"media_info failed for {pk_str}: {e} – trying dict fallback", logs)
+                                # If dict already looks like video, try to use it without extra call
+                                # Mark as failed but continue
+                                continue
+                        except Exception as e:
+                            log_msg(f"Item {idx} parse exception: {e}", logs)
+                            continue
+                    log_msg(f"Page {pages} parsed {parsed_this_page} medias skipped_ads={skipped_ads} no_pk={skipped_no_pk} (total {len(raw)}/{amount})", logs)
                     if not more_available or not next_max_id:
                         log_msg("No more pages available", logs)
                         break
