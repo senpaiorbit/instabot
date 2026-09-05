@@ -47,6 +47,7 @@ def load_config() -> dict:
         "RATE_LIMIT_SECONDS": "rate_limit_seconds",
         "PORT": "port",
         "SESSION_PATH": "session_path",
+        "CUSTOM_COVER": "custom_cover",
     }
     for env_key, cfg_key in env_map.items():
         val = os.getenv(env_key)

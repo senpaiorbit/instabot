@@ -70,15 +70,54 @@ def download_video(cl, media: dict, logs: list = None) -> dict:
             log_msg(f"requests download failed: {e2}", logs)
             raise RuntimeError(f"Failed to download video {media_id}: {e2}") from e
 
-    # Download thumbnail
-    if thumb_url:
+    # Download thumbnail - custom cover support: /cover/{n}.{jpg,jpeg,png,webp} via ?cover=n or config
+    # Check for custom cover request from global or caller
+    custom_cover = None
+    try:
+        # Look for cover param in logs context? caller can set via media dict or env
+        # Also support query via env var CUSTOM_COVER
+        custom_n = os.getenv("CUSTOM_COVER") or (media.get("_cover") if isinstance(media, dict) else None)
+        cover_dir = Path(__file__).parent.parent / "cover"
+        if custom_n:
+            # Try exact file or with extension
+            for ext in [".jpg", ".jpeg", ".png", ".webp"]:
+                p = cover_dir / f"{custom_n}{ext}"
+                if p.exists():
+                    custom_cover = p
+                    break
+                # Also try direct filename
+                p2 = cover_dir / str(custom_n)
+                if p2.exists():
+                    custom_cover = p2
+                    break
+        # If no specific, try to find any cover in folder
+        if not custom_cover and cover_dir.exists():
+            covers = sorted(cover_dir.glob("*.*"))
+            # Filter image types
+            covers = [c for c in covers if c.suffix.lower() in [".jpg",".jpeg",".png",".webp"]]
+            if covers:
+                # Pick by pk hash to be deterministic but varied
+                try:
+                    idx = int(str(pk)[-2:]) % len(covers) if pk and str(pk).isdigit() else 0
+                except:
+                    idx = 0
+                custom_cover = covers[idx]
+                log_msg(f"Auto-picked custom cover {custom_cover.name} from {len(covers)} covers", logs)
+    except Exception as e:
+        log_msg(f"Custom cover lookup failed: {e}", logs)
+
+    if custom_cover and custom_cover.exists():
+        try:
+            import shutil
+            shutil.copy(custom_cover, thumb_path)
+            log_msg(f"Using custom cover {custom_cover} -> {thumb_path} ({custom_cover.stat().st_size} bytes)", logs)
+            thumb_url = None  # skip remote download
+        except Exception as e:
+            log_msg(f"Custom cover copy failed: {e}", logs)
+
+    if thumb_url and not (thumb_path.exists() and custom_cover):
         try:
             log_msg(f"Downloading thumbnail {thumb_url[:80]}...", logs)
-            # Try local cover folder first? user has cover/2.jpg
-            local_cover = Path(__file__).parent.parent / "cover" / "2.jpg"
-            if local_cover.exists() and thumb_path.exists() is False:
-                # Optionally use local cover as fallback, but prefer remote
-                pass
             r = requests.get(thumb_url, timeout=30)
             r.raise_for_status()
             with open(thumb_path, "wb") as f:
@@ -86,17 +125,27 @@ def download_video(cl, media: dict, logs: list = None) -> dict:
             log_msg(f"Thumbnail saved to {thumb_path}", logs)
         except Exception as e:
             log_msg(f"Thumbnail download failed: {e} (will use default)", logs)
-            # Try to use local cover/2.jpg as fallback
-            local_cover = Path(__file__).parent.parent / "cover" / "2.jpg"
-            if local_cover.exists():
+            if custom_cover and custom_cover.exists():
                 import shutil
-                shutil.copy(local_cover, thumb_path)
-                log_msg(f"Used local cover/2.jpg as thumbnail", logs)
+                shutil.copy(custom_cover, thumb_path)
+                log_msg(f"Used custom cover fallback {custom_cover}", logs)
             else:
-                thumb_path = None
-    else:
-        thumb_path = None
-        log_msg("No thumbnail_url available", logs)
+                # Try legacy fallback cover/2.jpg
+                local_cover = Path(__file__).parent.parent / "cover" / "2.jpg"
+                if local_cover.exists():
+                    import shutil
+                    shutil.copy(local_cover, thumb_path)
+                    log_msg(f"Used local cover/2.jpg as thumbnail", logs)
+                else:
+                    thumb_path = None
+    elif not thumb_url and not thumb_path.exists():
+        if custom_cover and custom_cover.exists():
+            import shutil
+            shutil.copy(custom_cover, thumb_path)
+            log_msg(f"Used custom cover {custom_cover} (no thumb_url)", logs)
+        else:
+            thumb_path = None
+            log_msg("No thumbnail_url and no custom cover available", logs)
 
     return {
         "video_path": str(video_path) if video_path.exists() else None,
