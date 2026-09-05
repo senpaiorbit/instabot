@@ -207,11 +207,13 @@ def upload():
             })
 
         posted_ids = load_posted_ids() if not force else set()
-        log(f"Dedup store: {len(posted_ids)} already posted, force={force}")
+        log(f"Dedup store: {len(posted_ids)} already posted, force={force} (path={get_stats()['store_path']})")
+        if get_stats().get("free_tier_no_disk"):
+            log("Free tier: no persistent disk - will also check profile for dedup fallback")
 
         media = get_next_video_not_posted(videos, posted_ids, logs=logs)
         if not media:
-            log("All videos already posted (dedup)")
+            log("All videos already posted (local dedup)")
             return jsonify({
                 "status": "all_posted",
                 "scraped_total": len(all_medias),
@@ -220,6 +222,38 @@ def upload():
                 "logs": logs,
                 "time_taken": round(time.time()-start, 2)
             })
+
+        # Free-tier resilient check: if not in local but already on profile, skip and try next video
+        if not force and GLOBAL_CONFIG.get("dedup_mode") == "local_plus_profile":
+            from bot.store import is_duplicate_via_profile
+            profile_amount = int(GLOBAL_CONFIG.get("profile_check_amount", 12))
+            # Check if selected media already on profile
+            if is_duplicate_via_profile(cl, media, amount=profile_amount, logs=logs):
+                log(f"Selected {media['code']} is already on profile -> trying next video")
+                found_alt = None
+                for alt in videos:
+                    if alt["id"] == media["id"]:
+                        continue
+                    if alt["id"] in posted_ids or alt["pk"] in posted_ids or alt["code"] in posted_ids:
+                        continue
+                    if not is_duplicate_via_profile(cl, alt, amount=profile_amount, logs=logs):
+                        found_alt = alt
+                        break
+                    else:
+                        log(f"Alt {alt['code']} also on profile, skipping")
+                if found_alt:
+                    media = found_alt
+                    log(f"Switched to alt non-duplicate: {media['code']}")
+                else:
+                    log(f"All {len(videos)} videos already on profile")
+                    save_posted_id(media["id"], code=media["code"], pk=media["pk"])
+                    return jsonify({
+                        "status": "skipped_profile_duplicate",
+                        "reason": "all videos already on profile via #src_ marker",
+                        "skipped": {k: (str(v) if not isinstance(v, (str, int, float, bool, type(None))) else v) for k, v in media.items() if k != "_raw"},
+                        "logs": logs,
+                        "time_taken": round(time.time()-start, 2)
+                    }), 200
 
         log(f"Selected media id={media['id']} code={media['code']} caption={media['caption'][:80]}")
 
@@ -244,11 +278,12 @@ def upload():
         if not dl.get("video_path"):
             raise RuntimeError("Download failed - no video_path")
 
-        # 4. Build caption - config template
+        # 4. Build caption - config template + marker for free-tier dedup
         from bot.uploader import build_caption, upload_video
         extra = extra_caption or os.getenv("EXTRA_CAPTION") or GLOBAL_CONFIG.get("extra_caption")
         template = GLOBAL_CONFIG.get("caption_template", "{original}\n\n🎥 via @{username}")
-        caption = build_caption(media["caption"], username=media["username"], extra=extra, template=template)
+        add_marker = bool(GLOBAL_CONFIG.get("caption_marker", True))
+        caption = build_caption(media["caption"], username=media["username"], extra=extra, template=template, source_code=media["code"], add_marker=add_marker)
         log(f"Caption ({len(caption)} chars): {caption[:120]}...")
 
         # 5. Upload

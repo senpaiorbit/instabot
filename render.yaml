@@ -2,19 +2,19 @@ services:
   - type: web
     name: instabot2
     env: python
-    plan: free
+    plan: free # Free: no disk, no SSH, spins down after 15m - UptimeRobot required
     region: singapore # closest to IN, change to oregon if US
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 300 --graceful-timeout 30
     healthCheckPath: /health
     autoDeploy: false
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
       - key: SESSION_JSON
-        sync: false
+        sync: false # paste full session.json content here (Render Dashboard -> Environment)
       - key: TARGET_USERNAME
-        sync: false
+        sync: false # null in config.json = your feed, or e.g. "instagram"
       - key: UPLOAD_SECRET
         sync: false
         # generateValue: true  # uncomment to auto-generate
@@ -22,3 +22,5 @@ services:
         value: "10"
       - key: EXTRA_CAPTION
         value: "Follow for more 🔥"
+      # Free-tier dedup: uses /tmp + profile marker, no disk needed
+      # For paid, add disk and set STORE_PATH=/data/dedup.json + upgrade plan to starter
