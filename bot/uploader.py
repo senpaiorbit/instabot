@@ -53,16 +53,24 @@ def upload_video(cl, video_path: str, thumbnail_path: str = None, caption: str =
 
     log_msg(f"Uploading {vp} ({vp.stat().st_size} bytes) caption_len={len(caption)} thumb={tp}", logs)
 
-    # Try Reel (clip) first - most videos are reels now
+    # Try video_upload first on free tier (512MB) - clip_upload does ffmpeg analyze + long sleep and OOMs on Render free
+    # Use short configure_timeout to avoid gunicorn WORKER TIMEOUT (default 30s)
     last_err = None
-    for method in ["clip_upload", "video_upload"]:
+    for method in ["video_upload", "clip_upload"]:
         try:
             func = getattr(cl, method)
-            log_msg(f"Trying {method}...", logs)
+            log_msg(f"Trying {method} (free-tier optimized)...", logs)
+            # Pass short timeout for clip to avoid blocking worker
+            kwargs = {"caption": caption}
             if tp:
-                media = func(str(vp), caption=caption, thumbnail=str(tp))
+                kwargs["thumbnail"] = str(tp)
+            # Reduce sleep for clip to avoid WORKER TIMEOUT on gunicorn sync worker
+            if method == "clip_upload":
+                kwargs["configure_timeout"] = 5  # was 10, loop 50*10=500s -> OOM/timeout
+            if tp:
+                media = func(str(vp), **kwargs)
             else:
-                media = func(str(vp), caption=caption)
+                media = func(str(vp), **kwargs)
             # media is Media object
             mid = getattr(media, "id", getattr(media, "pk", "unknown"))
             code = getattr(media, "code", "")
@@ -83,7 +91,10 @@ def upload_video(cl, video_path: str, thumbnail_path: str = None, caption: str =
             if tp and "thumbnail" in str(e).lower():
                 try:
                     log_msg(f"Retrying {method} without thumbnail...", logs)
-                    media = func(str(vp), caption=caption)
+                    retry_kwargs = {"caption": caption}
+                    if method == "clip_upload":
+                        retry_kwargs["configure_timeout"] = 5
+                    media = func(str(vp), **retry_kwargs)
                     mid = getattr(media, "id", getattr(media, "pk", "unknown"))
                     code = getattr(media, "code", "")
                     log_msg(f"✅ Uploaded via {method} (no thumb): id={mid} code={code}", logs)
