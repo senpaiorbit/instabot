@@ -1,6 +1,11 @@
+# Pinned for Render Python 3.11.11 - pydantic-core has no 3.14 wheels (maturin fails on read-only cargo)
 Flask==3.1.0
-instagrapi>=2.1.3
+instagrapi==2.1.3
 Pillow==11.1.0
 requests==2.32.3
 python-dotenv==1.0.1
 gunicorn==23.0.0
+# pydantic stack with manylinux wheels for cp311 (avoid building pydantic-core 2.33.2 from source)
+pydantic==2.9.2
+pydantic-core==2.23.4
+pycryptodomex==3.21.0
