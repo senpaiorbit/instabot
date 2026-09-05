@@ -6,7 +6,7 @@
   "upload_mode": "clip",
   "dedup_enabled": true,
   "dedup_mode": "local_plus_profile",
-  "rate_limit_seconds": 90,
+  "rate_limit_seconds": 120,
   "port": 10000,
   "session_path": "session.json",
   "store_path": "/tmp/instabot_dedup.json",
