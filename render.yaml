@@ -4,7 +4,7 @@ services:
     env: python
     plan: free # Free: no disk, no SSH, spins down after 15m - UptimeRobot required
     region: singapore # closest to IN, change to oregon if US
-    buildCommand: "pip install --upgrade pip && pip install --only-binary=:all: -r requirements.txt"
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 300 --graceful-timeout 30
     healthCheckPath: /health
     autoDeploy: false
