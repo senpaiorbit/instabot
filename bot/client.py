@@ -99,27 +99,26 @@ def get_client(logs: list = None) -> Client:
         pass
 
     sessionid = session["authorization_data"]["sessionid"]
-    # sessionid in file is URL-encoded: 4837...%3A... -> requests will handle, but login_by_sessionid expects raw
-    # instagrapi handles both, but we try raw
     try:
         import urllib.parse
         decoded_sid = urllib.parse.unquote(sessionid)
-        # login_by_sessionid expects the cookie value, instagrapi will set it
         cl.login_by_sessionid(decoded_sid)
         log(f"Logged in via sessionid for ds_user_id={session['authorization_data'].get('ds_user_id')}")
     except (LoginRequired, ChallengeRequired) as e:
         log(f"Login failed - session expired or challenge: {e}")
-        raise
+        # Provide actionable upstream log
+        log("UPSTREAM: Instagram challenge_required - IP changed (Render) or too many requests. Wait 30-60m, reduce amount, or regenerate session.json on same region.")
+        raise RuntimeError(f"challenge_required: {e} - regenerate session.json or wait") from e
     except Exception as e:
+        # Detect challenge in generic exception as well
+        err_str = str(e).lower()
+        if "challenge" in err_str or "checkpoint" in err_str or "suspended" in err_str:
+            log(f"Login challenge detected: {e}")
+            log("UPSTREAM: Instagram flagged session. Avoid rapid /upload hits, add ?dry_run=1 for tests, set rate_limit_seconds=120 in config.json:8")
+            raise RuntimeError(f"challenge_required: {e}") from e
         log(f"login_by_sessionid failed: {e}")
-        # Fallback: try to set cookie directly
-        try:
-            cl.session.headers.update({"Authorization": f"Bearer {sessionid}"})
-            # Verify by fetching account info
-            cl.get_timeline_feed(amount=1)
-            log("Fallback header set, timeline check passed")
-        except Exception as e2:
-            raise RuntimeError(f"Failed to login with session.json: {e2}") from e
+        # No fallback with cl.session (no such attr) - fail fast with clear log
+        raise RuntimeError(f"Failed to login with session.json: {e}") from e
 
     # Verify login
     try:
