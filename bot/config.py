@@ -21,7 +21,12 @@ DEFAULT_CONFIG = {
     "use_local_cover_fallback": True,
     "log_level": "INFO",
     "profile_check_amount": 12,
-    "caption_marker": True
+    "caption_marker": True,
+    "custom_cover": None,
+    "force_personalized_feed": True,
+    "reels_only": True,
+    "reels_source": "reels",
+    "use_instaloader": True
 }
 
 CONFIG_PATH = Path(__file__).parent.parent / "config.json"
@@ -48,6 +53,8 @@ def load_config() -> dict:
         "PORT": "port",
         "SESSION_PATH": "session_path",
         "CUSTOM_COVER": "custom_cover",
+        "REELS_ONLY": "reels_only",
+        "REELS_SOURCE": "reels_source",
     }
     for env_key, cfg_key in env_map.items():
         val = os.getenv(env_key)
