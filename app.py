@@ -507,18 +507,25 @@ def upload():
             "time_taken": elapsed
         })
 
-    except Exception as e:
-        err = str(e)
+    except BaseException as e:
+        # Catch SystemExit from gunicorn WORKER TIMEOUT (clip_upload sleep) and OOM
+        err = str(e) or e.__class__.__name__
         tb = traceback.format_exc()
-        log(f"ERROR: {err}")
+        log(f"ERROR: {err} ({e.__class__.__name__})")
         log(tb)
+        # Special handling for gunicorn timeout / OOM on free 512MB
+        if "SystemExit" in e.__class__.__name__ or "timeout" in err.lower():
+            log("UPSTREAM: gunicorn WORKER TIMEOUT / OOM on free 512MB during clip configure. Fix: render.yaml timeout 600 already set, but Render still uses default 30s. Workaround: using video_upload first + configure_timeout=5, or test locally.")
+            log("TIP: Test locally: python app.py then curl localhost:10000/upload?dry_run=1 -- then real upload locally uses your PC RAM, not Render free.")
         elapsed = round(time.time()-start, 2)
         return jsonify({
             "status": "error",
             "error": err,
-            "traceback": tb.splitlines()[-10:],
+            "error_type": e.__class__.__name__,
+            "traceback": tb.splitlines()[-15:],
             "logs": logs,
-            "time_taken": elapsed
+            "time_taken": elapsed,
+            "hint": "If WORKER TIMEOUT/OOM: Render free 512MB can't handle clip analyze. Try ?target with smaller video, or run locally, or upgrade to Starter 1GB. video_upload is now tried first with short timeout."
         }), 500
 
 # For UptimeRobot auto-upload variant: hit /auto which does upload but returns 200 even if rate limited
