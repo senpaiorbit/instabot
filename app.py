@@ -187,6 +187,109 @@ def stats():
         "posted_ids_sample": list(ids)[:10]
     })
 
+def _wants_html():
+    # Browser wants HTML, UptimeRobot/API wants JSON
+    if request.args.get("json") == "1" or request.args.get("format") == "json":
+        return False
+    if request.args.get("html") == "1" or request.args.get("format") == "html":
+        return True
+    accept = request.headers.get("Accept", "")
+    # UptimeRobot uses Go-http-client, curl uses */* but browser sends text/html
+    if "text/html" in accept:
+        return True
+    # Default for /upload in browser is HTML live log, for /auto is JSON
+    if request.path == "/upload" and "Mozilla" in request.headers.get("User-Agent", ""):
+        return True
+    return False
+
+def _upload_html_shell():
+    # Show your request present + live other logs - no JSON, pure HTML as requested
+    # Preserve query string for JS fetch with json=1
+    qs = request.query_string.decode()
+    qs_json = (qs + "&json=1") if qs else "json=1"
+    # Also include cover param handling
+    html = f"""<!doctype html>
+<html><head><meta charset=utf-8><title>Upload - Live Log</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<style>
+body{{font-family:monospace;background:#0f172a;color:#e2e8f0;margin:0;padding:12px}}
+h1{{font-size:18px}} .card{{background:#1e293b;padding:12px;border-radius:8px;margin:8px 0}}
+#log{{white-space:pre-wrap;background:#020617;padding:10px;border-radius:8px;max-height:60vh;overflow:auto;font-size:12px;line-height:1.4;border:1px solid #334155}}
+.badge{{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;margin-right:6px}}
+.ok{{background:#22c55e;color:#000}} .err{{background:#ef4444}} .wait{{background:#38bdf8;color:#000}}
+a{{color:#7dd3fc}} button{{padding:6px 12px;border-radius:6px;border:0;background:#38bdf8;cursor:pointer;margin:4px}}
+input,select{{padding:6px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0}}
+</style></head><body>
+<h1>⬆️ /upload - Live Log <a href="/live">full live</a> <a href="/health">health</a> <a href="/stats">stats</a></h1>
+<div class=card>
+<b>Your request present:</b> <span class=badge id=req Badge>loading</span><br>
+Method: <b>{request.method}</b> &nbsp; IP: {request.remote_addr} &nbsp; Target: <b id=target>-</b> &nbsp; Cover: <b id=coverShow>-</b><br>
+URL: <code>{request.url}</code><br>
+<form id=ctrl style="margin-top:8px" onsubmit="return false">
+Target: <input id=inpTarget placeholder="timeline or username" style="width:160px"> 
+Amount: <input id=inpAmount type=number value="5" style="width:60px">
+Cover: <input id=inpCover placeholder="cover n or filename" style="width:120px" title="/cover/{{n}}.jpg"> 
+Dry run: <select id=inpDry><option value="0">real upload</option><option value="1">dry_run</option></select>
+<button onclick="startUpload()">Start Live Upload</button>
+</form>
+<div id=status class=card>Waiting to start...</div>
+</div>
+<div class=card><b>Live other logs (upstream):</b> <span id=liveStatus></span><div id=log>Connecting...</div></div>
+<script>
+const qs = new URLSearchParams(window.location.search);
+document.getElementById('inpTarget').value = qs.get('target')||'';
+document.getElementById('inpAmount').value = qs.get('amount')||'5';
+document.getElementById('inpCover').value = qs.get('cover')||'';
+document.getElementById('inpDry').value = qs.get('dry_run')||'0';
+document.getElementById('target').textContent = qs.get('target')||'timeline (personalized feed)';
+document.getElementById('coverShow').textContent = qs.get('cover')||'auto from /cover/*.*';
+let logTimer=null;
+let lastLogCount=0;
+async function fetchLiveLogs(){{
+  try{{
+    let r=await fetch('/logs'); let j=await r.json();
+    let txt = j.logs.slice(-80).join('\\n');
+    document.getElementById('log').textContent = txt;
+    document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
+    document.getElementById('liveStatus').textContent = 'live '+new Date().toLocaleTimeString()+' ('+j.count+' total)';
+  }}catch(e){{document.getElementById('liveStatus').textContent='error '+e;}}
+}}
+async function startUpload(){{
+  const t=document.getElementById('inpTarget').value;
+  const a=document.getElementById('inpAmount').value;
+  const c=document.getElementById('inpCover').value;
+  const d=document.getElementById('inpDry').value;
+  const url='/upload?json=1'+(t?'&target='+encodeURIComponent(t):'')+'&amount='+a+(c?'&cover='+encodeURIComponent(c):'')+'&dry_run='+d;
+  document.getElementById('reqBadge').textContent='running...'; document.getElementById('reqBadge').className='badge wait';
+  document.getElementById('status').innerHTML='<span class=badge wait>⏳ Upload started...</span> '+url+'<br>Fetching...';
+  document.getElementById('status').scrollIntoView();
+  try{{
+    let r=await fetch(url); let j=await r.json();
+    let ok = j.status==='uploaded' || j.status==='dry_run';
+    document.getElementById('reqBadge').textContent=j.status; document.getElementById('reqBadge').className='badge '+(ok?'ok':'err');
+    let html = '<b>Status:</b> '+j.status+'<br>';
+    if(j.error) html+='<b>Error:</b> <span style=color:#f87171>'+j.error+'</span><br>';
+    if(j.uploaded) html+='<b>Uploaded:</b> <a href="'+(j.uploaded.url||'#')+'" target=_blank>'+(j.uploaded.code||'')+'</a><br>';
+    if(j.selected) html+='<b>Selected:</b> '+j.selected.code+' @'+j.selected.username+'<br>';
+    html+='<b>Time:</b> '+(j.time_taken||'')+'s<br>';
+    html+='<details open><summary>Full logs</summary><pre style=white-space:pre-wrap;background:#020617;padding:8px;border-radius:6px;max-height:40vh;overflow:auto>'+ (j.logs||[]).join('\\n') +'</pre></details>';
+    if(j.traceback) html+='<details><summary>Traceback</summary><pre>'+j.traceback.join('\\n')+'</pre></details>';
+    document.getElementById('status').innerHTML=html;
+  }}catch(e){{
+    document.getElementById('reqBadge').textContent='error'; document.getElementById('reqBadge').className='badge err';
+    document.getElementById('status').innerHTML='<b>Fetch error:</b> '+e;
+  }}
+}}
+// Auto-start if not already dry_run page load? Only auto if ?autostart=1 or coming from direct /upload click
+if(qs.has('autostart') || window.location.search.includes('target') || window.location.search.includes('amount')){{
+  // Don't auto-start to avoid accidental double upload on refresh - user clicks button
+  document.getElementById('status').innerHTML='Click <b>Start Live Upload</b> to run (shows your request present + live other logs). Use <code>?json=1</code> for raw JSON.';
+}}
+fetchLiveLogs(); logTimer=setInterval(fetchLiveLogs, 2000);
+</script>
+</body></html>"""
+    return html, 200, {"Content-Type": "text/html"}
+
 @app.route("/upload", methods=["GET", "POST"])
 def upload():
     """
@@ -206,9 +309,13 @@ def upload():
         logs.append(m)
         print(m, flush=True)
 
+    # HTML live log view - browser shows HTML, API/UptimeRobot gets JSON
+    if _wants_html():
+        return _upload_html_shell()
+
     start = time.time()
     log("=== /upload triggered ===")
-    log(f"Method={request.method} IP={request.remote_addr} Args={dict(request.args)}")
+    log(f"Method={request.method} IP={request.remote_addr} Args={dict(request.args)} UA={request.headers.get('User-Agent','')[:40]}")
 
     # Optional secret protection
     required_secret = os.getenv("UPLOAD_SECRET")
@@ -238,8 +345,16 @@ def upload():
     amount = int(amount) if amount and str(amount).isdigit() else int(os.getenv("SCRAPE_AMOUNT", cfg_amount))
     dry_run = str(dry_run).lower() in ("1", "true", "yes") if dry_run else False
     force = str(force).lower() in ("1", "true", "yes") if force else False
+    # Custom cover: /cover/{n}.jpg etc via ?cover=2 or ?cover=2.jpg
+    cover = request.args.get("cover") or os.getenv("CUSTOM_COVER") or GLOBAL_CONFIG.get("custom_cover")
+    if cover:
+        log(f"Custom cover param: {cover} (will use /cover/{cover}.*)")
+    # Force personalized feed if config says so (ignore random reel)
+    if GLOBAL_CONFIG.get("force_personalized_feed") and target and target != "timeline":
+        log(f"Config force_personalized_feed=true -> ignoring target={target}, using timeline (personalized) instead")
+        target = None
 
-    log(f"Params: target={target or 'timeline'} amount={amount} dry_run={dry_run} force={force}")
+    log(f"Params: target={target or 'timeline (personalized)'} amount={amount} dry_run={dry_run} force={force} cover={cover or 'auto'}")
 
     # Rate limit: prevent double upload within configured seconds
     rate_limit = int(GLOBAL_CONFIG.get("rate_limit_seconds", 90))
@@ -342,8 +457,12 @@ def upload():
                 "time_taken": round(time.time()-start, 2)
             })
 
-        # 3. Download
+        # 3. Download - pass custom cover if set
         log("Step 3: Downloading video...")
+        if cover:
+            media["_cover"] = cover  # used by downloader for /cover/{n}.*
+            # Also set env for downloader fallback
+            os.environ["CUSTOM_COVER"] = str(cover)
         from bot.downloader import download_video
         dl = download_video(cl, media, logs=logs)
         log(f"Downloaded: {dl}")

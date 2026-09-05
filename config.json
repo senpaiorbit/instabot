@@ -14,5 +14,7 @@
   "use_local_cover_fallback": true,
   "log_level": "INFO",
   "profile_check_amount": 12,
-  "caption_marker": true
+  "caption_marker": true,
+  "custom_cover": null,
+  "force_personalized_feed": true
 }
